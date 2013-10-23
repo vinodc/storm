@@ -33,6 +33,7 @@ public class ShellSpout implements ISpout {
     public static Logger LOG = LoggerFactory.getLogger(ShellSpout.class);
 
     private SpoutOutputCollector _collector;
+    private Boolean _restartOnSubprocessLoss;
     private String[] _command;
     private ShellProcess _process;
 
@@ -42,11 +43,17 @@ public class ShellSpout implements ISpout {
     
     public ShellSpout(String... command) {
         _command = command;
+        _restartOnSubprocessLoss = false;
+    }
+    
+    public ShellSpout(Boolean restartOnSubprocessLoss, String... command) {
+        _command = command;
+        _restartOnSubprocessLoss = restartOnSubprocessLoss;
     }
     
     public void open(Map stormConf, TopologyContext context,
                      SpoutOutputCollector collector) {
-        _process = new ShellProcess(_command);
+        _process = new ShellProcess(_command, _restartOnSubprocessLoss);
         _collector = collector;
 
         try {
