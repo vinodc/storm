@@ -75,6 +75,7 @@ public class ShellBolt implements IBolt {
     private volatile Throwable _exception;
     private LinkedBlockingQueue _pendingWrites = new LinkedBlockingQueue();
     private Random _rand;
+    private Boolean _restartOnSubprocessLoss;
     
     private Thread _readerThread;
     private Thread _writerThread;
@@ -85,8 +86,14 @@ public class ShellBolt implements IBolt {
 
     public ShellBolt(String... command) {
         _command = command;
+        _restartOnSubprocessLoss = false;
     }
-
+    
+    public ShellBolt(Boolean restartOnSubprocessLoss, String... command) {
+        _command = command;
+        _restartOnSubprocessLoss = restartOnSubprocessLoss;
+    }
+    
     public void prepare(Map stormConf, TopologyContext context,
                         final OutputCollector collector) {
         Object maxPending = stormConf.get(Config.TOPOLOGY_SHELLBOLT_MAX_PENDING);
@@ -94,7 +101,7 @@ public class ShellBolt implements IBolt {
            this._pendingWrites = new LinkedBlockingQueue(((Number)maxPending).intValue());
         }
         _rand = new Random();
-        _process = new ShellProcess(_command);
+        _process = new ShellProcess(_command, _restartOnSubprocessLoss);
         _collector = collector;
 
         try {
