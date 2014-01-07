@@ -30,24 +30,39 @@ import java.util.List;
 import org.apache.commons.io.IOUtils;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ShellProcess {
-    public static Logger LOG = Logger.getLogger(ShellProcess.class);
+    public static Logger LOG = LoggerFactory.getLogger(ShellProcess.class);
     private DataOutputStream processIn;
     private BufferedReader processOut;
     private InputStream processErrorStream;
     private Process _subprocess;
     private String[] command;
+    private Map conf;
+    private TopologyContext context;
+    private Boolean relaunchOnSubprocessLoss;
+    private Boolean subprocessLost;
 
     public ShellProcess(String[] command) {
         this.command = command;
+        this.relaunchOnSubprocessLoss = false;
+    }
+    
+    public ShellProcess(String[] command, Boolean restartOnSubprocessLoss) {
+        this.command = command;
+        this.relaunchOnSubprocessLoss = restartOnSubprocessLoss;
     }
 
     public Number launch(Map conf, TopologyContext context) throws IOException {
+        this.conf = conf;
+        this.context = context;
+        
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(new File(context.getCodeDir()));
         _subprocess = builder.start();
+        subprocessLost = false;
 
         processIn = new DataOutputStream(_subprocess.getOutputStream());
         processOut = new BufferedReader(new InputStreamReader(_subprocess.getInputStream()));
@@ -62,12 +77,38 @@ public class ShellProcess {
         return (Number)readMessage().get("pid");
     }
 
+    private JSONObject relaunch() {
+        if (subprocessLost && relaunchOnSubprocessLoss) {
+            try {
+                destroy();
+                Number pid = launch(this.conf, this.context);
+                
+                JSONObject relaunchMsg = new JSONObject();
+                relaunchMsg.put("command", "error");
+                relaunchMsg.put("msg", "Relaunched subprocess with ID " + pid);
+                return relaunchMsg;
+            } catch (IOException e) {
+                LOG.error("Unable to relaunch subprocess.", e);
+                return null;
+            }
+        }
+        return null;
+    }
+    
     public void destroy() {
         _subprocess.destroy();
     }
 
     public void writeMessage(Object msg) throws IOException {
-        writeString(JSONValue.toJSONString(msg));
+        try {
+            writeString(JSONValue.toJSONString(msg));
+        } catch (IOException e) {
+            JSONObject relaunchMsg = relaunch();
+            if (relaunchMsg != null)
+                return;
+            else
+                throw e;
+        }
     }
 
     private void writeString(String str) throws IOException {
@@ -78,7 +119,26 @@ public class ShellProcess {
     }
 
     public JSONObject readMessage() throws IOException {
-        String string = readString();
+        String string;
+
+        try {
+            string = readString();
+        } catch (IOException e) {
+            JSONObject relaunchMsg = relaunch();
+            if (relaunchMsg != null) {
+                String errorMessage = e.getMessage();
+                if (errorMessage != null) {
+                    if (relaunchMsg.get("msg") != null)
+                        errorMessage = errorMessage + "\n" + relaunchMsg.get("msg");
+                    relaunchMsg.put("msg", errorMessage);
+                }
+                return relaunchMsg;
+            }
+            else {
+                throw e;
+            }
+        }
+
         JSONObject msg = (JSONObject)JSONValue.parse(string);
         if (msg != null) {
             return msg;
@@ -122,6 +182,7 @@ public class ShellProcess {
             while (true) {
                 String subline = processOut.readLine();
                 if(subline==null) {
+                    subprocessLost = true;
                     StringBuilder errorMessage = new StringBuilder();
                     errorMessage.append("Pipe to subprocess seems to be broken!");
                     if (line.length() == 0) {
@@ -131,8 +192,8 @@ public class ShellProcess {
                         errorMessage.append(" Currently read output: " + line.toString() + "\n");
                     }
                     errorMessage.append("Shell Process Exception:\n");
-                    errorMessage.append(getErrorsString() + "\n");
-                    throw new RuntimeException(errorMessage.toString());
+                    errorMessage.append(getErrorsString());
+                    throw new IOException(errorMessage.toString());
                 }
                 if(subline.equals("end")) {
                     break;
